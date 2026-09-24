@@ -43,12 +43,50 @@ app.use(express.json());
 const bookingLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many booking requests from this device. Please try again later or contact us directly.' } });
 const sessionLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Please wait a moment and try again.' } });
 
+// Logs enough to tell "PMS is unreachable/asleep" apart from "PMS returned an error" apart
+// from "PMS returned something unexpected" — the three failure modes that actually came up
+// while first deploying this service, and that a bare 502 to the browser can't distinguish.
+const logProxyError = (label, err) => {
+  if (err.response) console.error(`${label}: PMS responded ${err.response.status} — ${JSON.stringify(err.response.data)}`);
+  else if (err.request) console.error(`${label}: no response from PMS at ${PMS_API_URL} — ${err.message}`);
+  else console.error(`${label}: ${err.message}`);
+};
+
+// Reports this service's own commit/branch (Render sets these automatically) plus a live
+// reachability check against the PMS, so "is BookingSession broken or is PMS broken or are
+// they just out of sync" is one curl away instead of a multi-step investigation.
+app.get('/api/health', async (req, res) => {
+  const health = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    system: 'BookingSession',
+    commit: process.env.RENDER_GIT_COMMIT || null,
+    branch: process.env.RENDER_GIT_BRANCH || null,
+    pms_api_url: PMS_API_URL,
+    uptime_seconds: Math.round(process.uptime()),
+  };
+  try {
+    const start = Date.now();
+    const { data } = await pms.get('/api/health', { timeout: 10000 });
+    health.pms_reachable = true;
+    health.pms_latency_ms = Date.now() - start;
+    health.pms = data;
+  } catch (err) {
+    health.pms_reachable = false;
+    health.pms_error = err.response ? `HTTP ${err.response.status}` : err.message;
+  }
+  res.json(health);
+});
+
 // --- Proxy reads straight through to the PMS ---
 app.get('/api/public/properties', async (req, res) => {
   try {
     const { data } = await pms.get('/api/public/properties');
     res.json(data);
-  } catch (err) { res.status(502).json({ error: 'Could not load properties right now. Please try again shortly.' }); }
+  } catch (err) {
+    logProxyError('GET /api/public/properties', err);
+    res.status(502).json({ error: 'Could not load properties right now. Please try again shortly.' });
+  }
 });
 
 app.get('/api/public/properties/:id', async (req, res) => {
@@ -57,6 +95,7 @@ app.get('/api/public/properties/:id', async (req, res) => {
     res.json(data);
   } catch (err) {
     if (err.response?.status === 404) return res.status(404).json({ error: 'Not found' });
+    logProxyError(`GET /api/public/properties/${req.params.id}`, err);
     res.status(502).json({ error: 'Could not load this property right now. Please try again shortly.' });
   }
 });
@@ -65,7 +104,10 @@ app.get('/api/public/properties/:id/availability', async (req, res) => {
   try {
     const { data } = await pms.get(`/api/public/properties/${req.params.id}/availability`, { params: req.query });
     res.json(data);
-  } catch (err) { res.status(502).json({ error: 'Could not load availability right now. Please try again shortly.' }); }
+  } catch (err) {
+    logProxyError(`GET /api/public/properties/${req.params.id}/availability`, err);
+    res.status(502).json({ error: 'Could not load availability right now. Please try again shortly.' });
+  }
 });
 
 // --- Create booking (proxied to PMS), then hand the browser an opaque payment-session token ---
@@ -83,8 +125,10 @@ app.post('/api/public/bookings', bookingLimiter, async (req, res) => {
       claimed: false,
       expires_at: Date.now() + SESSION_TTL_MS,
     });
+    console.log(`Booking #${booking.id} created (${booking.property_name}, ₹${booking.amount}) — session ${token.slice(0, 8)}...`);
     res.status(201).json({ payment_session_token: token });
   } catch (err) {
+    logProxyError('POST /api/public/bookings', err);
     if (err.response) return res.status(err.response.status).json(err.response.data);
     res.status(502).json({ error: 'Could not create your booking right now. Please try again shortly.' });
   }
@@ -113,8 +157,10 @@ app.post('/api/public/payment-sessions/:token/mark-paid', sessionLimiter, async 
   try {
     await pms.post(`/api/public/bookings/${s.booking_id}/mark-payment-claimed`);
     s.claimed = true;
+    console.log(`Payment claimed for booking #${s.booking_id}`);
     res.json({ status: 'ok' });
   } catch (err) {
+    logProxyError(`POST /api/public/payment-sessions/${req.params.token}/mark-paid (booking #${s.booking_id})`, err);
     res.status(502).json({ error: 'Could not record your payment right now. Please try again or contact us directly.' });
   }
 });
