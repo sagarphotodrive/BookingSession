@@ -1,0 +1,25 @@
+{
+  "name": "booking-session",
+  "version": "1.0.0",
+  "description": "Stay Nestura customer-facing booking + UPI payment service",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "npm install && cd frontend && npm install && npm run build",
+    "dev": "nodemon server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.7.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

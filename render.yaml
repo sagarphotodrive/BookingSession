@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: booking-session
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      # URL of the deployed stay-nestura-pms service (no trailing slash), e.g.
+      # https://stay-nestura-pms.onrender.com — required, this service has no data of
+      # its own and proxies everything to the PMS.
+      - key: PMS_API_URL
+        sync: false
+      - key: UPI_ID
+        value: staynestura77@idfcbank
+      - key: UPI_PAYEE_NAME
+        value: Stay Nestura
